@@ -37,6 +37,7 @@ pub mod stochastic_model;
 pub mod stress_testing;
 pub mod structural_model;
 pub mod valuation_adjustment;
+pub mod vanilla_analytics;
 pub mod var;
 pub mod yield_curve_construction;
 pub mod device;
