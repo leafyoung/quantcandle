@@ -17,10 +17,23 @@
 //! BarrierOption, CashOrNothingPayoff + AnalyticEuropeanEngine) and against
 //! tff itself in float64; embedded literals below come from those runs.
 //!
-//! Rebate convention (tff semantics): for knock-outs the rebate is paid at
-//! hit, for knock-ins at expiry. QuantLib's AnalyticBarrierEngine agrees with
-//! tff on knock-in rebates but pays knock-out rebates at expiry, so
-//! knock-out-rebate literals are tff-float64-verified rather than QL-verified.
+//! Rebate conventions: by default (`barrier_price_analytic`, tff semantics)
+//! a knock-out rebate is paid at hit and a knock-in rebate at expiry.
+//! `barrier_price_analytic_expiry_rebate` instead pays a knock-out rebate at
+//! expiry iff the barrier is never touched (the standard Reiner-Rubinstein
+//! knock-out-rebate-at-expiry term `R * DF * P(survival)`, obtained by
+//! re-weighting the same survival-probability terms the knock-in rows use);
+//! knock-in results never depend on the choice.
+//!
+//! QuantLib cross-check (AnalyticBarrierEngine, QL 1.44): QL's knock-in
+//! rebate equals the survival term above to <=2e-15, and QL's knock-out
+//! rebate is paid at hit with the Haug `lam = sqrt(mu^2 + 2r/sigma^2)`
+//! parameterization (matches QL to <=2e-15), which differs from tff's
+//! `b`-parameterized hit-time term (e.g. by +0.0298 on the S=100 K=100 B=85
+//! R=3 vol=25% T=1 case). QL knock-out totals therefore match neither path;
+//! the expiry-rebate test literals are composed from pure QL numbers,
+//! `QL KO(R=0) + QL KI rebate term`, which equals main + survival term
+//! exactly (engine agreement <=5.3e-15).
 
 use crate::black_scholes_merton::normal_cdf;
 
@@ -72,12 +85,89 @@ pub fn barrier_price_analytic(
     is_knock_out: bool,
     is_call: bool,
 ) -> f64 {
+    barrier_price_analytic_impl(
+        volatility,
+        strike,
+        expiry,
+        spot,
+        barrier,
+        rebate,
+        discount_rate,
+        dividend_rate,
+        is_barrier_down,
+        is_knock_out,
+        is_call,
+        false,
+    )
+}
+
+/// Same as [`barrier_price_analytic`], but a knock-out rebate is paid at
+/// expiry iff the barrier is never touched (value `R * DF * P(survival)`,
+/// the standard Reiner-Rubinstein knock-out-rebate-at-expiry term) instead
+/// of at hit. Knock-in results are identical under both functions because
+/// knock-in rebates are paid at expiry in both conventions.
+pub fn barrier_price_analytic_expiry_rebate(
+    volatility: f64,
+    strike: f64,
+    expiry: f64,
+    spot: f64,
+    barrier: f64,
+    rebate: f64,
+    discount_rate: f64,
+    dividend_rate: f64,
+    is_barrier_down: bool,
+    is_knock_out: bool,
+    is_call: bool,
+) -> f64 {
+    barrier_price_analytic_impl(
+        volatility,
+        strike,
+        expiry,
+        spot,
+        barrier,
+        rebate,
+        discount_rate,
+        dividend_rate,
+        is_barrier_down,
+        is_knock_out,
+        is_call,
+        true,
+    )
+}
+
+fn barrier_price_analytic_impl(
+    volatility: f64,
+    strike: f64,
+    expiry: f64,
+    spot: f64,
+    barrier: f64,
+    rebate: f64,
+    discount_rate: f64,
+    dividend_rate: f64,
+    is_barrier_down: bool,
+    is_knock_out: bool,
+    is_call: bool,
+    rebate_paid_at_expiry: bool,
+) -> f64 {
     let index =
         ((is_barrier_down as usize) << 2) + ((is_knock_out as usize) << 1) + (is_call as usize);
     let masks = if strike > barrier {
         MASK_GREATER_STRIKE[index]
     } else {
         MASK_LOWER_STRIKE[index]
+    };
+    // Knock-out with the rebate paid at expiry: move the rebate weight from
+    // the hit-time terms (columns 11-12) onto the survival-probability terms
+    // (columns 9-10) that the knock-in rows use. Knock-in rows are unaffected.
+    let masks = if is_knock_out && rebate_paid_at_expiry {
+        let mut m = masks;
+        m[8] = m[10];
+        m[9] = m[11];
+        m[10] = 0.0;
+        m[11] = 0.0;
+        m
+    } else {
+        masks
     };
 
     let call_or_put = if is_call { 1.0 } else { -1.0 };
@@ -307,5 +397,60 @@ mod tests {
         assert!((binary_price(0.0, 90.0, 1.0, 100.0, R, Q, true) - (-R).exp()).abs() < 1e-14);
         assert!((binary_price(0.0, 110.0, 1.0, 100.0, R, Q, false) - (-R).exp()).abs() < 1e-14);
         assert!(binary_price(0.0, 110.0, 1.0, 100.0, R, Q, true).abs() < 1e-14);
+    }
+
+    /// Knock-out rebate paid at expiry iff the barrier is never touched
+    /// (`R * DF * P(survival)`). QL's AnalyticBarrierEngine pays KO rebates
+    /// at hit (Haug lam parameterization), so these literals are composed
+    /// from pure QL numbers: QL KO(R=0) + QL KI rebate term (== the survival
+    /// term); the engine reproduces them to <= 5.3e-15.
+    #[test]
+    fn barrier_ko_rebate_paid_at_expiry() {
+        // known case: down-out call S=100 K=100 B=85 R=3 vol=25% T=1
+        let v = barrier_price_analytic_expiry_rebate(
+            0.25, 100.0, 1.0, 100.0, 85.0, 3.0, R, Q, true, true, true,
+        );
+        assert!((v - 11.300833094739227).abs() < 1e-10);
+        // up-out put S=100 K=90 B=112 R=4 vol=25% T=0.6, r=3% q=1%
+        let v = barrier_price_analytic_expiry_rebate(
+            0.25, 90.0, 0.6, 100.0, 112.0, 4.0, 0.03, 0.01, false, true, false,
+        );
+        assert!((v - 4.509289715741195).abs() < 1e-10);
+    }
+
+    /// Knock-in results are invariant under the rebate-timing choice: KI
+    /// rebates are paid at expiry in both conventions (bit-identical over
+    /// all eight KI mask rows).
+    #[test]
+    fn barrier_rebate_flag_ki_invariance() {
+        let cases = [
+            (0.25, 130.0, 1.0, 100.0, 125.0, 2.0, R, Q, false, false, false), // up-in put, K > B
+            (0.25, 140.0, 1.0, 100.0, 120.0, 1.0, R, Q, false, false, true),  // up-in call, K > B
+            (0.22, 95.0, 0.8, 100.0, 88.0, 2.0, 0.06, 0.01, true, false, false), // down-in put, K > B
+            (0.25, 110.0, 1.0, 100.0, 85.0, 1.5, R, Q, true, false, true),    // down-in call, K > B
+            (0.25, 90.0, 0.6, 100.0, 112.0, 4.0, 0.03, 0.01, false, false, false), // up-in put, K < B
+            (0.25, 100.0, 0.6, 100.0, 112.0, 4.0, 0.03, 0.01, false, false, true), // up-in call, K < B
+            (0.22, 80.0, 0.8, 100.0, 88.0, 2.0, 0.06, 0.01, true, false, false), // down-in put, K < B
+            (0.25, 80.0, 1.0, 100.0, 85.0, 1.5, R, Q, true, false, true),     // down-in call, K < B
+        ];
+        for (vol, k, t, s, bar, reb, r, q, down, _, call) in cases {
+            let a = barrier_price_analytic(vol, k, t, s, bar, reb, r, q, down, false, call);
+            let b =
+                barrier_price_analytic_expiry_rebate(vol, k, t, s, bar, reb, r, q, down, false, call);
+            assert_eq!(a, b, "KI invariance failed: vol={vol} k={k} t={t} down={down} call={call}");
+        }
+    }
+
+    /// The default (hit-timing) path keeps the tff convention untouched;
+    /// the expiry-rebate variant genuinely moves the KO rebate term.
+    #[test]
+    fn barrier_rebate_flag_default_unchanged() {
+        let hit = barrier_price_analytic(0.25, 100.0, 1.0, 100.0, 85.0, 3.0, R, Q, true, true, true);
+        assert!((hit - 11.475189709298022).abs() < 1e-10);
+        let expiry = barrier_price_analytic_expiry_rebate(
+            0.25, 100.0, 1.0, 100.0, 85.0, 3.0, R, Q, true, true, true,
+        );
+        assert!((expiry - 11.300833094739227).abs() < 1e-10);
+        assert!((hit - expiry).abs() > 0.1);
     }
 }

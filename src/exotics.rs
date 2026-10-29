@@ -170,9 +170,10 @@ pub fn barrier_option(
     sum / num_paths as f64
 }
 
-/// Price a lookback option by Monte Carlo with daily steps (252 per year,
-/// matching the Python hard-coded `dt = expiry / 252`).
-pub fn lookback_option(
+/// Shared lookback Monte-Carlo core. `bgk_up` / `bgk_dn` multiply the running
+/// maximum / minimum before the payoff; both are 1.0 for discrete monitoring
+/// (`x * 1.0` is exact in IEEE-754, so the discrete path is unchanged).
+fn lookback_mc(
     option_type: &str,
     spot: f64,
     strike: f64,
@@ -182,13 +183,9 @@ pub fn lookback_option(
     num_paths: usize,
     strike_type: &str,
     seed: u64,
+    bgk_up: f64,
+    bgk_dn: f64,
 ) -> f64 {
-    validate_parameters(volatility, expiry, Some(num_paths));
-    validate_option_type(option_type);
-    if strike_type != "fixed" && strike_type != "floating" {
-        panic!("Invalid strike type");
-    }
-
     let dt = expiry / 252.0;
     let num_steps = (expiry / dt) as usize;
     let mut rng = Xorshift64Star::new(seed);
@@ -213,18 +210,80 @@ pub fn lookback_option(
         }
         let payoff = if option_type == "call" {
             if strike_type == "fixed" {
-                (max_p - strike).max(0.0)
+                (max_p * bgk_up - strike).max(0.0)
             } else {
-                (price - max_p).max(0.0)
+                (price - max_p * bgk_up).max(0.0)
             }
         } else if strike_type == "fixed" {
-            (strike - min_p).max(0.0)
+            (strike - min_p * bgk_dn).max(0.0)
         } else {
-            (min_p - price).max(0.0)
+            (min_p * bgk_dn - price).max(0.0)
         };
         sum += payoff * disc;
     }
     sum / num_paths as f64
+}
+
+/// Price a lookback option by Monte Carlo with daily steps (252 per year,
+/// matching the Python hard-coded `dt = expiry / 252`).
+pub fn lookback_option(
+    option_type: &str,
+    spot: f64,
+    strike: f64,
+    expiry: f64,
+    volatility: f64,
+    rate: f64,
+    num_paths: usize,
+    strike_type: &str,
+    seed: u64,
+) -> f64 {
+    validate_parameters(volatility, expiry, Some(num_paths));
+    validate_option_type(option_type);
+    if strike_type != "fixed" && strike_type != "floating" {
+        panic!("Invalid strike type");
+    }
+    lookback_mc(
+        option_type, spot, strike, expiry, volatility, rate, num_paths, strike_type, seed, 1.0, 1.0,
+    )
+}
+
+/// Broadie-Glasserman-Kou (1997) continuity-correction constant
+/// `beta = -zeta(1/2) / sqrt(2*pi) ~= 0.5826`.
+const BGK_BETA: f64 = 0.5825971579390108;
+
+/// Price a lookback option under CONTINUOUS monitoring by Monte Carlo, via
+/// the Broadie-Glasserman-Kou (1997) continuity correction applied to the
+/// discrete-monitoring estimator: in distribution the continuously monitored
+/// extremum satisfies `max_cont ~ max_disc * e^{+beta*sigma*sqrt(dt)}` and
+/// `min_cont ~ min_disc * e^{-beta*sigma*sqrt(dt)}`, so the running maximum is
+/// inflated (resp. minimum deflated) by that factor before the payoff.
+/// Verified against QuantLib 1.44 `AnalyticContinuousFixedLookbackEngine`
+/// (fixed call S=100 K=100 r=5% q=0 vol=20% T=1 -> 19.16762525733232; the
+/// uncorrected discrete estimator sits ~4.6% low at 252 steps).
+/// Seed convention: same `Xorshift64Star` as `lookback_option`; the embedded
+/// tests use seeds 1244 (call) / 1245 (put), next in the module's sequence.
+pub fn lookback_option_continuous(
+    option_type: &str,
+    spot: f64,
+    strike: f64,
+    expiry: f64,
+    volatility: f64,
+    rate: f64,
+    num_paths: usize,
+    strike_type: &str,
+    seed: u64,
+) -> f64 {
+    validate_parameters(volatility, expiry, Some(num_paths));
+    validate_option_type(option_type);
+    if strike_type != "fixed" && strike_type != "floating" {
+        panic!("Invalid strike type");
+    }
+    let dt = expiry / 252.0;
+    let up = (BGK_BETA * volatility * dt.sqrt()).exp();
+    let dn = (-BGK_BETA * volatility * dt.sqrt()).exp();
+    lookback_mc(
+        option_type, spot, strike, expiry, volatility, rate, num_paths, strike_type, seed, up, dn,
+    )
 }
 
 /// Price an Asian (average-price) option by Monte Carlo.
@@ -500,6 +559,51 @@ mod tests {
         // floating-put test. Reference: scripts/gen_exotics.py, seed 1239.
         let v = lookback_option("put", 100.0, 100.0, 0.5, 0.2, 0.05, 200, "fixed", 1239);
         assert!((v - 9.323267890110916).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookback_continuous_fixed_call() {
+        // Reference: scripts/gen_exotics.py lookback_option_continuous,
+        // seed 1244 (first seed of the continuous variant).
+        let v = lookback_option_continuous("call", 100.0, 100.0, 0.5, 0.2, 0.05, 200, "fixed", 1244);
+        assert!((v - 11.879877441725975).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lookback_continuous_fixed_call_ql_golden() {
+        // 200k paths, 252 steps, seed 1244. QuantLib 1.44 golden:
+        // ContinuousFixedLookbackOption + AnalyticContinuousFixedLookbackEngine,
+        // S=100 K=100 r=5% q=0 vol=20% T=1 -> 19.16762525733232.
+        // BGK-corrected MC lands ~2.4e-3 relative below the golden at this
+        // seed (MC noise at 200k paths is of the same order); band 3e-2.
+        let v = lookback_option_continuous("call", 100.0, 100.0, 1.0, 0.2, 0.05, 200_000, "fixed", 1244);
+        assert!((v - 19.12157821818025).abs() < 1e-9);
+        let golden = 19.16762525733232_f64;
+        assert!((v - golden).abs() / golden <= 3e-2);
+    }
+
+    #[test]
+    fn lookback_continuous_fixed_put_ql_golden() {
+        // 200k paths, 252 steps, seed 1245. QL golden (same setup, put):
+        // 12.339744687432269. Verifies the minimum-deflation direction
+        // (min_cont ~ min_disc * e^{-beta*sigma*sqrt(dt)}).
+        let v = lookback_option_continuous("put", 100.0, 100.0, 1.0, 0.2, 0.05, 200_000, "fixed", 1245);
+        assert!((v - 12.324399072817435).abs() < 1e-9);
+        let golden = 12.339744687432269_f64;
+        assert!((v - golden).abs() / golden <= 3e-2);
+    }
+
+    #[test]
+    fn lookback_continuous_vs_discrete_bgk_gap() {
+        // Same seed (1244): the BGK-adjusted price exceeds the discrete price
+        // by ~4.6% here. The extremum itself is inflated only by
+        // e^{beta*sigma*sqrt(dt)} ~ 1.00737; the price gap is leveraged
+        // through (f*E[M] - K) / (E[M] - K) with E[M] ~ 119, K = 100.
+        let d = lookback_option("call", 100.0, 100.0, 1.0, 0.2, 0.05, 200_000, "fixed", 1244);
+        let c = lookback_option_continuous("call", 100.0, 100.0, 1.0, 0.2, 0.05, 200_000, "fixed", 1244);
+        let ratio = c / d;
+        assert!((ratio - 1.0456898499452234).abs() < 1e-9);
+        assert!(ratio > 1.03 && ratio < 1.06);
     }
 
     #[test]
