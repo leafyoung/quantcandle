@@ -12,6 +12,9 @@ serde_json = "1"
 [features]
 default = []
 mkl = ["candle-core/mkl"]
+# NVIDIA GPU backend (requires the CUDA toolkit; set CUDA_PATH to the
+# toolkit root, e.g. C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6)
+cuda = ["candle-core/cuda"]
 
 [[bin]]
 name = "crosscheck"
