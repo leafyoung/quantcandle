@@ -20,6 +20,11 @@ Candle 0.9.2 has **no Vulkan backend upstream** (only CUDA/Metal/accelerate/MKL;
 the ROCm PR huggingface/candle#3801 is still open). Configurations here:
 - `cargo build` — CPU
 - `cargo build --features mkl` — CPU + MKL kernels (the accelerated variant)
+- `cargo build --features cuda` — NVIDIA GPU (CUDA toolkit required; set CUDA_PATH
+  to the toolkit root and have MSVC cl.exe in PATH). VERIFIED on ap304win
+  (RTX 3060 Ti, CUDA 12.6): 142/142 tests including the device smoke test
+  (tensor add + cublas matmul on Device::cuda vs CPU results).
+  make_device('cuda') selects Device::new_cuda(0); crosscheck --backend cuda.
 Burn keeps Vulkan via burn-wgpu; that pairing is quantburn-only.
 
 ## Cross-check runner
