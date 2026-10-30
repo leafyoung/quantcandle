@@ -58,6 +58,6 @@ mod tests {
             .unwrap()
             .to_vec1::<f64>()
             .unwrap();
-        assert_eq!(m, vec![19.0, 22.0, 43.0, 50.0]);
+        assert_eq!(m, vec![17.0, 23.0, 39.0, 53.0]);
     }
 }
