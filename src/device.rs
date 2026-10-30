@@ -49,7 +49,7 @@ mod tests {
             .unwrap();
         let b = candle_core::Tensor::from_vec(vec![5.0f64, 6.0, 7.0, 8.0], (2, 2), &dev)
             .unwrap();
-        let c = (a + b.clone()).unwrap();
+        let c = (a.clone() + b.clone()).unwrap();
         let vals = c.flatten_all().unwrap().to_vec1::<f64>().unwrap();
         assert_eq!(vals, vec![6.0, 8.0, 10.0, 12.0]);
         // matmul (exercises cublas)
