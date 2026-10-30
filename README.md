@@ -25,6 +25,9 @@ the ROCm PR huggingface/candle#3801 is still open). Configurations here:
   (RTX 3060 Ti, CUDA 12.6): 142/142 tests including the device smoke test
   (tensor add + cublas matmul on Device::cuda vs CPU results).
   make_device('cuda') selects Device::new_cuda(0); crosscheck --backend cuda.
+  BENCHMARK (bench_tensor, 500k paths x 64 GBM steps, transfer-inclusive):
+  CUDA 0.214s vs CPU 0.483s on the same draws = 2.3x speedup (plus a
+  one-time ~2.3s kernel warmup).
 Burn keeps Vulkan via burn-wgpu; that pairing is quantburn-only.
 
 ## Cross-check runner
