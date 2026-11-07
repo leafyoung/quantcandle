@@ -30,6 +30,10 @@ the ROCm PR huggingface/candle#3801 is still open). Configurations here:
   BENCHMARK (bench_tensor, 500k paths x 64 GBM steps, transfer-inclusive):
   CUDA 0.214s vs CPU 0.483s on the same draws = 2.3x speedup (plus a
   one-time ~2.3s kernel warmup).
+  Heston-workload proxy (quantcandle's Heston Euler loop is scalar-f64 by
+  design; the honest proxy is the same tensor GBM at Heston-like
+  r=5%/sigma=50%): CUDA 0.197s vs CPU 0.576s = 2.9x speedup (same-draw
+  means identical).
 Burn keeps Vulkan via burn-wgpu; that pairing is quantburn-only.
 
 ## Cross-check runner
