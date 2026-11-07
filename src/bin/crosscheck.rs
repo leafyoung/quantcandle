@@ -24,7 +24,7 @@ use quantcandle::{
     cir::zero_coupon_bond_price as cir_zcb,
     exotics,
     expected_shortfall::calculate_es,
-    greeks::european_option_greeks,
+    greeks::{asian_option_greeks, barrier_option_greeks, basket_option_greeks, european_option_greeks},
     heston::{characteristic_function_price, monte_carlo_option_price, HestonParams},
     hull_white::HullWhiteModel,
     sabr::{black76_price, hagan_lognormal_implied_volatility, option_price as sabr_option_price, SabrParams},
@@ -355,6 +355,100 @@ fn price_case(model: &str, p: &serde_json::Value) -> Result<CaseResult, String> 
             f64_of(p, "put_price")?,
             i64_of(p, "put_period")?,
         )),
+        "greeks_barrier" => {
+            let g = barrier_option_greeks(
+                f64_of(p, "spot")?,
+                f64_of(p, "strike")?,
+                f64_of(p, "barrier")?,
+                f64_of(p, "expiry")?,
+                f64_of(p, "rate")?,
+                f64_of(p, "volatility")?,
+                str_of(p, "barrier_type")?,
+                opt_usize(p, "n_paths", 65536),
+                opt_usize(p, "steps", 64),
+                opt_seed(p),
+            )?;
+            Ok(CaseResult {
+                id: String::new(),
+                ok: true,
+                price: None,
+                values: BTreeMap::from([
+                    ("delta".into(), g.delta),
+                    ("gamma".into(), g.gamma),
+                    ("vega".into(), g.vega),
+                ]),
+                error: None,
+            })
+        }
+        "greeks_basket" => {
+            let s0: Vec<f64> = p
+                .get("spots")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+                .ok_or("spots must be an array")?;
+            let sigma: Vec<f64> = p
+                .get("volatilities")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+                .ok_or("volatilities must be an array")?;
+            let rho: Vec<Vec<f64>> = p
+                .get("corr")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .map(|row| {
+                            row.as_array()
+                                .map(|r| r.iter().filter_map(|v| v.as_f64()).collect())
+                                .unwrap_or_default()
+                        })
+                        .collect()
+                })
+                .ok_or("corr must be a 2d array")?;
+            let weights: Vec<f64> = p
+                .get("weights")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+                .ok_or("weights must be an array")?;
+            let (delta, _gamma, _vega) = basket_option_greeks(
+                &s0,
+                f64_of(p, "strike")?,
+                f64_of(p, "expiry")?,
+                f64_of(p, "rate")?,
+                &sigma,
+                &rho,
+                &weights,
+                opt_usize(p, "n_paths", 65536),
+                opt_seed(p),
+            );
+            let mut values = BTreeMap::new();
+            for (i, d) in delta.iter().enumerate() {
+                values.insert(format!("delta{}", i), *d);
+            }
+            Ok(CaseResult { id: String::new(), ok: true, price: None, values, error: None })
+        }
+        "greeks_asian" => {
+            let g = asian_option_greeks(
+                f64_of(p, "spot")?,
+                f64_of(p, "strike")?,
+                f64_of(p, "expiry")?,
+                f64_of(p, "rate")?,
+                f64_of(p, "volatility")?,
+                opt_usize(p, "n_paths", 65536),
+                opt_usize(p, "steps", 64),
+                opt_seed(p),
+            );
+            Ok(CaseResult {
+                id: String::new(),
+                ok: true,
+                price: None,
+                values: BTreeMap::from([
+                    ("delta".into(), g.delta),
+                    ("gamma".into(), g.gamma),
+                    ("vega".into(), g.vega),
+                ]),
+                error: None,
+            })
+        }
         "greeks_european" => {
             let g = european_option_greeks(
                 f64_of(p, "spot")?,

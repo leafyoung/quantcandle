@@ -67,14 +67,35 @@ fn bench(dev: &Device, name: &str, n: usize, steps: usize) {
     );
 }
 
+fn bench_params(dev: &Device, name: &str, n: usize, steps: usize, r: f64, sigma: f64) {
+    let t0 = Instant::now();
+    let log_p = gbm_log_paths(dev, 100.0, r, sigma, 1.0, n, steps, 42).unwrap();
+    let s = log_p.exp().unwrap();
+    let mean = s.mean_all().unwrap().to_scalar::<f64>().unwrap();
+    println!(
+        "{name}: {n}x{steps} paths (r={r}, sigma={sigma}) in {:.3}s (mean S={mean:.4})",
+        t0.elapsed().as_secs_f64()
+    );
+}
+
 fn main() {
     let (n, steps) = (500_000usize, 64usize);
     println!("GBM path tensor benchmark: {n} paths x {steps} steps");
-    bench(&Device::Cpu, "cpu", n, steps);
+    // NOTE: quantcandle's Heston Euler loop is scalar-f64 by design
+    // (heston.rs; only quantjax has the tensor variant), so the
+    // Heston-workload proxy is the same tensor GBM at Heston-like
+    // parameters (r=0.05, sigma=0.5) — same op count per step, honest
+    // about what is actually being measured.
+    let variants: [(&str, f64, f64); 2] = [("base r=5% s=20%", 0.05, 0.2), ("heston-like r=5% s=50%", 0.05, 0.5)];
+    for (tag, r, sg) in variants {
+        bench_params(&Device::Cpu, &format!("cpu {tag}"), n, steps, r, sg);
+    }
     match Device::new_cuda(0) {
         Ok(dev) => {
-            bench(&dev, "cuda(warmup)", 10_000, 8);
-            bench(&dev, "cuda", n, steps);
+            bench_params(&dev, "cuda warmup", 10_000, 8, 0.05, 0.2);
+            for (tag, r, sg) in variants {
+                bench_params(&dev, &format!("cuda {tag}"), n, steps, r, sg);
+            }
         }
         Err(e) => println!("cuda unavailable: {e}"),
     }

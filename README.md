@@ -1,5 +1,7 @@
 # quantcandle
 
+[![CI](https://github.com/leafyoung/quantcandle/actions/workflows/ci.yml/badge.svg)](https://github.com/leafyoung/quantcandle/actions/workflows/ci.yml)
+
 Candle-framework port of `torchquantlib` (Python/PyTorch), mirroring
 `../quantburn` module-for-module so the three libraries can be cross-checked
 numerically. See `../quantburn/CONVENTIONS.md` for the conversion conventions
