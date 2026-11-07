@@ -381,16 +381,15 @@ fn price_case(model: &str, p: &serde_json::Value) -> Result<CaseResult, String> 
             })
         }
         "greeks_basket" => {
-            let s0: Vec<f64> = p
-                .get("spots")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
-                .ok_or("spots must be an array")?;
-            let sigma: Vec<f64> = p
-                .get("volatilities")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
-                .ok_or("volatilities must be an array")?;
+            let f64_array = |key: &str| -> Result<Vec<f64>, String> {
+                p.get(key)
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+                    .ok_or(format!("{key} must be an array"))
+            };
+            let s0 = f64_array("spots")?;
+            let sigma = f64_array("volatilities")?;
+            let weights = f64_array("weights")?;
             let rho: Vec<Vec<f64>> = p
                 .get("corr")
                 .and_then(|x| x.as_array())
@@ -404,11 +403,6 @@ fn price_case(model: &str, p: &serde_json::Value) -> Result<CaseResult, String> 
                         .collect()
                 })
                 .ok_or("corr must be a 2d array")?;
-            let weights: Vec<f64> = p
-                .get("weights")
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
-                .ok_or("weights must be an array")?;
             let (delta, _gamma, _vega) = basket_option_greeks(
                 &s0,
                 f64_of(p, "strike")?,

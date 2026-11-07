@@ -56,17 +56,6 @@ fn gbm_log_paths(
     Ok(((w + drift_bc)? + log_s0_col)?)
 }
 
-fn bench(dev: &Device, name: &str, n: usize, steps: usize) {
-    let t0 = Instant::now();
-    let log_p = gbm_log_paths(dev, 100.0, 0.05, 0.2, 1.0, n, steps, 42).unwrap();
-    let s = log_p.exp().unwrap();
-    let mean = s.mean_all().unwrap().to_scalar::<f64>().unwrap();
-    println!(
-        "{name}: {n}x{steps} paths in {:.3}s (mean S={mean:.4})",
-        t0.elapsed().as_secs_f64()
-    );
-}
-
 fn bench_params(dev: &Device, name: &str, n: usize, steps: usize, r: f64, sigma: f64) {
     let t0 = Instant::now();
     let log_p = gbm_log_paths(dev, 100.0, r, sigma, 1.0, n, steps, 42).unwrap();
